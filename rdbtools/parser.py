@@ -596,7 +596,7 @@ class RdbParser(object):
         elif enc_type == REDIS_RDB_TYPE_HASH_LISTPACK: 
             self.read_hash_from_listpack(f)
         elif enc_type == REDIS_RDB_TYPE_ZSET_LISTPACK:
-            pass
+            self.read_zset_from_listpack(f)
         elif enc_type == REDIS_RDB_TYPE_LIST_QUICKLIST_2:
             pass
         elif enc_type == REDIS_RDB_TYPE_STREAM_LISTPACKS_2:
@@ -748,6 +748,26 @@ class RdbParser(object):
             raise Exception('read_zset_from_ziplist', "Invalid zip list end - %d for key %s" % (zlist_end, self._key))
         self._callback.end_sorted_set(self._key)
 
+    def read_zset_from_listpack(self, f) :
+        raw_string = self.read_string(f)
+        buff = BytesIO(raw_string)
+        total_len = read_unsigned_int(buff)
+        num_entries = read_unsigned_short(buff)
+        if (num_entries % 2) :
+            raise Exception('read_zset_from_listpack', "Expected even number of elements, but found %d for key %s" % (num_entries, self._key))
+        num_entries = num_entries // 2
+        self._callback.start_sorted_set(self._key, num_entries, self._expiry, info={'encoding':'listpack', 'sizeof_value':len(raw_string),'idle':self._idle,'freq':self._freq})
+        for x in range(0, num_entries) :
+            member = self.read_listpack_entry(buff)
+            score = self.read_listpack_entry(buff)
+            if isinstance(score, bytes) :
+                score = float(score)
+            self._callback.zadd(self._key, score, member)
+        lp_end = read_unsigned_char(buff)
+        if lp_end != 255 : 
+            raise Exception('read_zset_from_listpack', "Invalid zip list end - %d for key %s" % (lp_end, self._key))
+        self._callback.end_sorted_set(self._key)
+
     def read_hash_from_ziplist(self, f) :
         raw_string = self.read_string(f)
         buff = BytesIO(raw_string)
@@ -770,7 +790,6 @@ class RdbParser(object):
     def read_hash_from_listpack(self, f) :
         raw_string = self.read_string(f)
         buff = BytesIO(raw_string)
-
         total_len = read_unsigned_int(buff)
         num_entries = read_unsigned_short(buff)
         if (num_entries % 2) :
