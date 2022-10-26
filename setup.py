@@ -18,7 +18,7 @@ Rdbtools is written in Python, though there are similar projects in other langua
 
 
 sdict = {
-    'name' : 'rdbtools',
+    'name' : 'rdbtools2',
     'version' : __version__,
     'description' : 'Utilities to convert Redis RDB files to JSON or SQL formats',
     'long_description' : long_description,

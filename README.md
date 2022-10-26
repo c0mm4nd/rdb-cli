@@ -1,6 +1,8 @@
 # Parse Redis dump.rdb files, Analyze Memory, and Export Data to JSON #
 
-Rdbtools is a parser for Redis' dump.rdb files. The parser generates events similar to an xml sax parser, and is very efficient memory wise.
+**SUPPORTING LATEST REDIS**
+
+Rdbtools2 is a parser for Redis' dump.rdb files. The parser generates events similar to an xml sax parser, and is very efficient memory wise.
 
 In addition, rdbtools provides utilities to :
 
@@ -21,11 +23,11 @@ Pre-Requisites :
 
 To install from PyPI (recommended) :
 
-    pip install rdbtools python-lzf
+    pip install rdbtools2 python-lzf
     
 To install from source : 
 
-    git clone https://github.com/sripathikrishnan/redis-rdb-tools
+    git clone https://github.com/c0mm4nd/redis-rdb-tools
     cd redis-rdb-tools
     sudo python setup.py install
 
