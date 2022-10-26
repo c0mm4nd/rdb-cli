@@ -52,6 +52,11 @@ REDIS_RDB_TYPE_ZSET_ZIPLIST = 12
 REDIS_RDB_TYPE_HASH_ZIPLIST = 13
 REDIS_RDB_TYPE_LIST_QUICKLIST = 14
 REDIS_RDB_TYPE_STREAM_LISTPACKS = 15
+# add for v10 rdb support, following https://github.com/redis/redis/blob/unstable/src/rdb.h
+REDIS_RDB_TYPE_HASH_LISTPACK = 16
+REDIS_RDB_TYPE_ZSET_LISTPACK = 17
+REDIS_RDB_TYPE_LIST_QUICKLIST_2 = 18
+REDIS_RDB_TYPE_STREAM_LISTPACKS_2 = 19
 
 REDIS_RDB_ENC_INT8 = 0
 REDIS_RDB_ENC_INT16 = 1
@@ -588,6 +593,14 @@ class RdbParser(object):
             self.read_module(f)
         elif enc_type == REDIS_RDB_TYPE_STREAM_LISTPACKS:
             self.read_stream(f)
+        elif enc_type == REDIS_RDB_TYPE_HASH_LISTPACK: 
+            self.read_hash_from_listpack(f)
+        elif enc_type == REDIS_RDB_TYPE_ZSET_LISTPACK:
+            pass
+        elif enc_type == REDIS_RDB_TYPE_LIST_QUICKLIST_2:
+            pass
+        elif enc_type == REDIS_RDB_TYPE_STREAM_LISTPACKS_2:
+            pass
         else:
             raise Exception('read_object', 'Invalid object type %d for key %s' % (enc_type, self._key))
 
@@ -753,8 +766,76 @@ class RdbParser(object):
         if zlist_end != 255 : 
             raise Exception('read_hash_from_ziplist', "Invalid zip list end - %d for key %s" % (zlist_end, self._key))
         self._callback.end_hash(self._key)
-    
-    
+
+    def read_hash_from_listpack(self, f) :
+        raw_string = self.read_string(f)
+        buff = BytesIO(raw_string)
+
+        total_len = read_unsigned_int(buff)
+        num_entries = read_unsigned_short(buff)
+        if (num_entries % 2) :
+            raise Exception('read_hash_from_listpack', "Expected even number of elements, but found %d for key %s" % (num_entries, self._key))
+        num_entries = num_entries // 2
+        self._callback.start_hash(self._key, num_entries, self._expiry, info={'encoding':'listpack', 'sizeof_value':len(raw_string),'idle':self._idle,'freq':self._freq})
+
+        for x in range(0, num_entries):
+            field = self.read_listpack_entry(buff)
+            value = self.read_listpack_entry(buff)
+            self._callback.hset(self._key, field, value)
+        lp_end = read_unsigned_char(buff)
+        if lp_end != 255: 
+            raise Exception('read_hash_from_listpack', "Invalid listpack end - %d for key %s" % (lp_end, self._key))
+        self._callback.end_hash(self._key)
+
+    def read_listpack_entry(self, f):
+        length = 0
+        value = None
+
+        entry_header = read_unsigned_char(f) # 0x86
+        if entry_header & 0xFF ==  0xF0:
+            # LP_ENCODING_IS_32BIT_STR
+            length = read_unsigned_int()
+            value = f.read(length)
+        elif entry_header & 0xFF == 0xF4 :
+            # LP_ENCODING_IS_64BIT_INT
+            value = read_signed_long(f)
+        elif entry_header & 0xFF == 0xF3 :
+            # LP_ENCODING_IS_32BIT_INT
+            value = read_signed_int(f)
+        elif entry_header & 0xFF == 0xF2:
+            # LP_ENCODING_IS_24BIT_INT
+            value = read_24bit_signed_number(f)
+        elif entry_header & 0xFF == 0xF1:
+            # LP_ENCODING_IS_16BIT_INT
+            value = read_signed_short(f)
+        elif entry_header & 0xF0 == 0xE0:
+            # LP_ENCODING_IS_12BIT_STR
+            remain = entry_header & 0b00001111
+            length = remain + read_signed_char(f)
+            value = f.read(length)
+        elif entry_header & 0xE0 == 0xC0:
+            # LP_ENCODING_IS_13BIT_INT
+            remain = entry_header & 0b00001111
+            value = remain << 8 + read_signed_char(f)
+            if (remain & 0b00010000 != 0b00010000):
+                value = -value
+        elif entry_header & 0xC0 == 0x80:
+            # LP_ENCODING_IS_6BIT_STR
+            length = entry_header & 0b00111111
+            value = f.read(length)
+        elif entry_header & 0x80 == 0x00:
+            # LP_ENCODING_IS_7BIT_UINT
+            value = entry_header & 0b01111111
+        else :
+            raise Exception('read_listpack_entry', 'Invalid entry_header %d for key %s' % (entry_header, self._key))
+        
+        back_length = read_unsigned_char(f)
+        if back_length == 254 :
+            print(254)
+            back_length = read_unsigned_int(f)
+
+        return value
+
     def read_ziplist_entry(self, f) :
         length = 0
         value = None
@@ -959,7 +1040,7 @@ class RdbParser(object):
 
     def verify_version(self, version_str) :
         version = int(version_str)
-        if version < 1 or version > 9:
+        if version < 1 or version > 10:
             raise Exception('verify_version', 'Invalid RDB version number %d' % version)
         self._rdb_version = version
 

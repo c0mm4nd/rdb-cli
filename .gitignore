@@ -13,3 +13,5 @@ tests/dumps/dump_sorted_sets.rdb
 venv2.6/
 venv2.7/
 venv3/
+
+*.rdb
