@@ -598,9 +598,9 @@ class RdbParser(object):
         elif enc_type == REDIS_RDB_TYPE_ZSET_LISTPACK:
             self.read_zset_from_listpack(f)
         elif enc_type == REDIS_RDB_TYPE_LIST_QUICKLIST_2:
-            pass
+            raise Exception('read_object', 'object type %d for key %s will be implemented soon' % (enc_type, self._key))
         elif enc_type == REDIS_RDB_TYPE_STREAM_LISTPACKS_2:
-            pass
+            raise Exception('read_object', 'object type %d for key %s will be implemented soon' % (enc_type, self._key))
         else:
             raise Exception('read_object', 'Invalid object type %d for key %s' % (enc_type, self._key))
 
@@ -669,6 +669,14 @@ class RdbParser(object):
         elif enc_type == REDIS_RDB_TYPE_MODULE_2:
             self.skip_module(f)
         elif enc_type == REDIS_RDB_TYPE_STREAM_LISTPACKS:
+            self.skip_stream(f)
+        elif enc_type == REDIS_RDB_TYPE_HASH_LISTPACK: 
+            skip_strings = 1
+        elif enc_type == REDIS_RDB_TYPE_ZSET_LISTPACK:
+            skip_strings = 1
+        elif enc_type == REDIS_RDB_TYPE_LIST_QUICKLIST_2:
+            skip_strings = self.read_length(f)
+        elif enc_type == REDIS_RDB_TYPE_STREAM_LISTPACKS_2:
             self.skip_stream(f)
         else:
             raise Exception('skip_object', 'Invalid object type %d for key %s' % (enc_type, self._key))
