@@ -5,7 +5,9 @@ from rdbtools import __version__
 long_description = '''
 Parse Redis dump.rdb files, Analyze Memory, and Export Data to JSON
 
-Rdbtools is a parser for Redis' dump.rdb files. The parser generates events similar to an xml sax parser, and is very efficient memory wise.
+RDB-CLI is a parser for Redis' dump.rdb files. The parser generates events similar to an xml sax parser, and is very efficient memory wise.
+
+**SUPPORTING LATEST REDIS**
 
 In addition, rdbtools provides utilities to :
 
@@ -13,12 +15,12 @@ In addition, rdbtools provides utilities to :
  2. Convert dump files to JSON
  3. Compare two dump files using standard diff tools
 
-Rdbtools is written in Python, though there are similar projects in other languages. See FAQs (https://github.com/sripathikrishnan/redis-rdb-tools/wiki/FAQs) for more information.
+RDB-CLI is forked from rdbtools written in Python, though there are similar projects in other languages. See FAQs (https://github.com/sripathikrishnan/redis-rdb-tools/wiki/FAQs) for more information.
 '''
 
 
 sdict = {
-    'name' : 'rdbtools2',
+    'name' : 'rdb-cli',
     'version' : __version__,
     'description' : 'Utilities to convert Redis RDB files to JSON or SQL formats',
     'long_description' : long_description,
