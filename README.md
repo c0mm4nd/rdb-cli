@@ -23,7 +23,7 @@ Pre-Requisites :
 
 To install from PyPI (recommended) :
 
-    pip install rdbtools2 python-lzf
+    pip install rdb-cli python-lzf
     
 To install from source : 
 
