@@ -57,6 +57,9 @@ REDIS_RDB_TYPE_HASH_LISTPACK = 16
 REDIS_RDB_TYPE_ZSET_LISTPACK = 17
 REDIS_RDB_TYPE_LIST_QUICKLIST_2 = 18
 REDIS_RDB_TYPE_STREAM_LISTPACKS_2 = 19
+# add for v11+ support (Valkey 8.1+)
+REDIS_RDB_TYPE_SET_LISTPACK = 20
+REDIS_RDB_TYPE_STREAM_LISTPACKS_3 = 21
 
 REDIS_RDB_ENC_INT8 = 0
 REDIS_RDB_ENC_INT16 = 1
@@ -72,7 +75,8 @@ REDIS_RDB_MODULE_OPCODE_STRING = 5
 
 DATA_TYPE_MAPPING = {
     0 : "string", 1 : "list", 2 : "set", 3 : "sortedset", 4 : "hash", 5 : "sortedset", 6 : "module", 7: "module",
-    9 : "hash", 10 : "list", 11 : "set", 12 : "sortedset", 13 : "hash", 14 : "list", 15 : "stream"}
+    9 : "hash", 10 : "list", 11 : "set", 12 : "sortedset", 13 : "hash", 14 : "list", 15 : "stream",
+    16 : "hash", 17 : "sortedset", 18 : "list", 19 : "stream", 20 : "set", 21 : "stream"}
 
 class RdbCallback(object):
     """
@@ -332,7 +336,7 @@ class RdbCallback(object):
         """
         pass
 
-    def end_stream(self, key, items, last_entry_id, cgroups):
+    def end_stream(self, key, items, last_entry_id, cgroups, **kwargs):
         """
         Called when there is no more data in the stream
 
@@ -340,6 +344,10 @@ class RdbCallback(object):
         `items` is the total number of items in the stream
         `last_entry_id` is in "<millisecondsTime>-<sequenceNumber>" format
         `cgroups` is an array of consumer group metadata
+        `kwargs` may contain additional fields in newer RDB versions:
+            - first_entry_id: First entry ID (v11+)
+            - max_deleted_entry_id: Max deleted entry ID (v11+)  
+            - entries_added: Total entries added (v11+)
 
         """
         pass
@@ -598,9 +606,14 @@ class RdbParser(object):
         elif enc_type == REDIS_RDB_TYPE_ZSET_LISTPACK:
             self.read_zset_from_listpack(f)
         elif enc_type == REDIS_RDB_TYPE_LIST_QUICKLIST_2:
-            raise Exception('read_object', 'object type %d for key %s will be implemented soon' % (enc_type, self._key))
+            self.read_list_from_quicklist_2(f)
         elif enc_type == REDIS_RDB_TYPE_STREAM_LISTPACKS_2:
-            raise Exception('read_object', 'object type %d for key %s will be implemented soon' % (enc_type, self._key))
+            self.read_stream_listpacks_2(f)
+        elif enc_type == REDIS_RDB_TYPE_SET_LISTPACK:
+            self.read_set_from_listpack(f)
+        elif enc_type == REDIS_RDB_TYPE_STREAM_LISTPACKS_3:
+            # v11 stream format - likely same as v2 or with minor additions
+            self.read_stream_listpacks_2(f)
         else:
             raise Exception('read_object', 'Invalid object type %d for key %s' % (enc_type, self._key))
 
@@ -675,8 +688,16 @@ class RdbParser(object):
         elif enc_type == REDIS_RDB_TYPE_ZSET_LISTPACK:
             skip_strings = 1
         elif enc_type == REDIS_RDB_TYPE_LIST_QUICKLIST_2:
-            skip_strings = self.read_length(f)
+            # QUICKLIST_2 has container encoding byte before each listpack
+            count = self.read_length(f)
+            for i in range(count):
+                skip(f, 1)  # Skip container encoding byte
+                self.skip_string(f)  # Skip listpack data
         elif enc_type == REDIS_RDB_TYPE_STREAM_LISTPACKS_2:
+            self.skip_stream(f)
+        elif enc_type == REDIS_RDB_TYPE_SET_LISTPACK:
+            skip_strings = 1
+        elif enc_type == REDIS_RDB_TYPE_STREAM_LISTPACKS_3:
             self.skip_stream(f)
         else:
             raise Exception('skip_object', 'Invalid object type %d for key %s' % (enc_type, self._key))
@@ -700,6 +721,28 @@ class RdbParser(object):
             else :
                 raise Exception('read_intset', 'Invalid encoding %d for key %s' % (encoding, self._key))
             self._callback.sadd(self._key, entry)
+        self._callback.end_set(self._key)
+
+    def read_set_from_listpack(self, f):
+        """Read set from listpack encoding (RDB v11+)"""
+        raw_string = self.read_string(f)
+        buff = BytesIO(raw_string)
+        # Listpack header
+        lp_total_bytes = read_unsigned_int(buff)
+        lp_num_elements = read_unsigned_short(buff)
+        
+        self._callback.start_set(self._key, lp_num_elements, self._expiry, 
+                                 info={'encoding':'listpack', 'sizeof_value':len(raw_string),'idle':self._idle,'freq':self._freq})
+        
+        for x in range(0, lp_num_elements):
+            member = self.read_listpack_entry(buff)
+            self._callback.sadd(self._key, member)
+        
+        # Verify end marker
+        lp_end = read_unsigned_char(buff)
+        if lp_end != 255:
+            raise Exception('read_set_from_listpack', "Invalid listpack end - %d for key %s" % (lp_end, self._key))
+        
         self._callback.end_set(self._key)
 
     def read_ziplist(self, f) :
@@ -734,6 +777,41 @@ class RdbParser(object):
             if zlist_end != 255:
                 raise Exception('read_quicklist', "Invalid zip list end - %d for key %s" % (zlist_end, self._key))
         self._callback.end_list(self._key, info={'encoding': 'quicklist', 'zips': count, 'sizeof_value': total_size})
+
+    def read_list_from_quicklist_2(self, f):
+        """Read quicklist 2 format (RDB v10+) which uses listpacks instead of ziplists
+        
+        In QUICKLIST_2, each node has a container encoding byte before the listpack data.
+        This byte indicates if the listpack is plain (2) or compressed (1=LZF).
+        """
+        count = self.read_length(f)
+        total_size = 0
+        self._callback.start_list(self._key, self._expiry, info={'encoding': 'quicklist2', 'listpacks': count,'idle':self._idle,'freq':self._freq})
+        for i in range(0, count):
+            # Read container encoding (1=LZF compressed, 2=plain/raw)
+            container_encoding = read_unsigned_char(f)
+            
+            # Read the listpack as a length-encoded string
+            raw_string = self.read_string(f)
+            total_size += len(raw_string)
+            
+            # Parse the listpack
+            buff = BytesIO(raw_string)
+            # Listpack header: 4 bytes total length + 2 bytes num elements
+            lp_total_bytes = read_unsigned_int(buff)
+            lp_num_elements = read_unsigned_short(buff)
+            
+            # Read each element from the listpack
+            for x in range(0, lp_num_elements):
+                value = self.read_listpack_entry(buff)
+                self._callback.rpush(self._key, value)
+            
+            # Verify end marker
+            lp_end = read_unsigned_char(buff)
+            if lp_end != 255:
+                raise Exception('read_quicklist_2', "Invalid listpack end marker 0x%02x (expected 0xFF) for key %s" % (lp_end, self._key))
+                
+        self._callback.end_list(self._key, info={'encoding': 'quicklist2', 'listpacks': count, 'sizeof_value': total_size})
 
     def read_zset_from_ziplist(self, f) :
         raw_string = self.read_string(f)
@@ -1045,6 +1123,67 @@ class RdbParser(object):
                                  'consumers': consumers_data})
         self._callback.end_stream(self._key, items, last_entry_id, cgroups_data)
 
+    def read_stream_listpacks_2(self, f):
+        """Read stream listpacks 2 format (RDB v11+) with extended metadata"""
+        listpacks = self.read_length(f)
+        self._callback.start_stream(self._key, listpacks, self._expiry,
+                                    info={'encoding': 'listpack2', 'idle': self._idle, 'freq': self._freq})
+        for _lp in range(listpacks):
+            self._callback.stream_listpack(self._key, self.read_string(f), self.read_string(f))
+        items = self.read_length(f)
+        last_entry_id = "%s-%s" % (self.read_length(f), self.read_length(f))
+        
+        # RDB v11 additions: first and max deleted entry IDs
+        first_entry_id = "%s-%s" % (self.read_length(f), self.read_length(f))
+        max_deleted_entry_id = "%s-%s" % (self.read_length(f), self.read_length(f))
+        entries_added = self.read_length(f)
+        
+        cgroups = self.read_length(f)
+        cgroups_data = []
+        for _cg in range(cgroups):
+            cgname = self.read_string(f)
+            last_cg_entry_id = "%s-%s" % (self.read_length(f), self.read_length(f))
+            
+            # RDB v11 additions for consumer groups
+            cg_entries_read = self.read_length(f)
+            
+            pending = self.read_length(f)
+            group_pending_entries = []
+            for _pel in range(pending):
+                eid = f.read(16)
+                delivery_time = read_milliseconds_time(f)
+                delivery_count = self.read_length(f)
+                group_pending_entries.append({'id': eid,
+                                              'delivery_time': delivery_time,
+                                              'delivery_count': delivery_count})
+            consumers = self.read_length(f)
+            consumers_data = []
+            for _c in range(consumers):
+                cname = self.read_string(f)
+                seen_time = read_milliseconds_time(f)
+                
+                # RDB v11 addition: active time for consumer
+                active_time = read_milliseconds_time(f)
+                
+                pending = self.read_length(f)
+                consumer_pending_entries = []
+                for _pel in range(pending):
+                    eid = f.read(16)
+                    consumer_pending_entries.append({'id': eid})
+                consumers_data.append({'name': cname,
+                                       'seen_time': seen_time,
+                                       'active_time': active_time,
+                                       'pending': consumer_pending_entries})
+            cgroups_data.append({'name': cgname,
+                                 'last_entry_id': last_cg_entry_id,
+                                 'entries_read': cg_entries_read,
+                                 'pending': group_pending_entries,
+                                 'consumers': consumers_data})
+        self._callback.end_stream(self._key, items, last_entry_id, cgroups_data,
+                                  first_entry_id=first_entry_id,
+                                  max_deleted_entry_id=max_deleted_entry_id,
+                                  entries_added=entries_added)
+
     charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
 
     def _decode_module_id(self, module_id):
@@ -1067,7 +1206,7 @@ class RdbParser(object):
 
     def verify_version(self, version_str) :
         version = int(version_str)
-        if version < 1 or version > 10:
+        if version < 1 or version > 12:
             raise Exception('verify_version', 'Invalid RDB version number %d' % version)
         self._rdb_version = version
 

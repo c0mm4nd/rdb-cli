@@ -3,7 +3,40 @@ import codecs
 from collections import namedtuple
 import random
 import bisect
-from distutils.version import StrictVersion
+try:
+    from distutils.version import StrictVersion
+except ImportError:
+    # distutils is removed in Python 3.12+, use simple version comparison
+    class StrictVersion:
+        def __init__(self, vstring):
+            parts = vstring.split('.')
+            self.version = tuple(int(x) for x in parts if x.isdigit())
+        
+        def __lt__(self, other):
+            if isinstance(other, str):
+                other = StrictVersion(other)
+            return self.version < other.version
+        
+        def __le__(self, other):
+            if isinstance(other, str):
+                other = StrictVersion(other)
+            return self.version <= other.version
+        
+        def __gt__(self, other):
+            if isinstance(other, str):
+                other = StrictVersion(other)
+            return self.version > other.version
+        
+        def __ge__(self, other):
+            if isinstance(other, str):
+                other = StrictVersion(other)
+            return self.version >= other.version
+        
+        def __eq__(self, other):
+            if isinstance(other, str):
+                other = StrictVersion(other)
+            return self.version == other.version
+
 try:
     import ujson as json
 except:
@@ -351,7 +384,7 @@ class MemoryCallback(RdbCallback):
         # formula for memory estimation copied from Redis's streamRadixTreeMemoryUsage
         return 16*num_elements + num_nodes*4 + num_nodes*30*self.sizeof_long()
 
-    def end_stream(self, key, items, last_entry_id, cgroups):
+    def end_stream(self, key, items, last_entry_id, cgroups, **kwargs):
         # Now after we have some global key+value overheads, and all listpacks sizes,
         # we need to add some estimations for radix tree and consumer groups.
         # The logic for the memory estimation copied from Redis's MEMORY command.

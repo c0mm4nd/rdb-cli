@@ -119,7 +119,7 @@ class JSONCallback(RdbCallback):
         self._start_key(key, 0)
         self._out.write(self.encode_key(key) + b':{')
 
-    def end_stream(self, key, items, last_entry_id, cgroups):
+    def end_stream(self, key, items, last_entry_id, cgroups, **kwargs):
         self._end_key(key)
         self._out.write(b'}')
 
@@ -257,7 +257,7 @@ class KeyValsOnlyCallback(RdbCallback):
         self._start_key(key, 0)
         self._out.write(self.encode_key(key) + b' ')
 
-    def end_stream(self, key, items, last_entry_id, cgroups):
+    def end_stream(self, key, items, last_entry_id, cgroups, **kwargs):
         self._end_key(key)
 
     def start_module(self, key, module_name, expiry, info):
@@ -343,7 +343,7 @@ class DiffCallback(RdbCallback):
     def end_sorted_set(self, key):
         pass
 
-    def end_stream(self, key, items, last_entry_id, cgroups):
+    def end_stream(self, key, items, last_entry_id, cgroups, **kwargs):
         self._out.write(self.dbstr() + self.encode_key(key) + b' -> stream-items=' + encodehelpers.num2bytes(items))
         self.newline()
 
